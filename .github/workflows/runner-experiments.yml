@@ -1,4 +1,4 @@
-name: runner-experiments
+﻿name: runner-experiments
 on:
   workflow_dispatch:
   push:
@@ -95,7 +95,7 @@ jobs:
       - name: poison _actions checkout cache
         shell: powershell
         run: |
-          $act = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) '_actions\actions\checkout\v4\dist\index.js'
+          $act = Join-Path (Split-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) -Parent) '_actions\actions\checkout\v4\dist\index.js'
           if (Test-Path $act) {
             Set-Content -Path $act -Value 'console.log("E3_CANARY executed from poisoned _actions cache");' -Encoding utf8
             Write-Host "E3_POISONED=$act"
@@ -109,7 +109,7 @@ jobs:
       - name: check whether poisoned action survived
         shell: powershell
         run: |
-          $act = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) '_actions\actions\checkout\v4\dist\index.js'
+          $act = Join-Path (Split-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) -Parent) '_actions\actions\checkout\v4\dist\index.js'
           $still = $false
           if (Test-Path $act) { $still = Select-String -Path $act -Pattern 'E3_CANARY' -Quiet -ErrorAction SilentlyContinue }
           if ($still) { Write-Host 'E3_STATE=still_poisoned_and_executed' } else { Write-Host 'E3_STATE=refetched_by_runner' }
@@ -139,3 +139,4 @@ jobs:
           $up = Join-Path $env:USERPROFILE '.e5_marker'
           Write-Host "E5_SIBLING=$(if (Test-Path $sib) { 'persisted' } else { 'missing' })"
           Write-Host "E5_USERPROFILE=$(if (Test-Path $up) { 'persisted' } else { 'missing' })"
+
