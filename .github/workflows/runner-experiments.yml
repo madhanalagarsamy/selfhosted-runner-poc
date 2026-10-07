@@ -1,6 +1,8 @@
 name: runner-experiments
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   e1-setup:
